@@ -1,61 +1,72 @@
 from langchain.prompts import PromptTemplate
 
-# Intent Classification Prompt - IMPROVED VERSION
+# Intent Classification Prompt - Ultra Robust
 INTENT_CLASSIFICATION_PROMPT = PromptTemplate(
     input_variables=["message"],
-    template="""You are an expert AI assistant for a ride-sharing platform. Your job is to classify user messages accurately.
+    template="""You are a ride-sharing classification AI. Classify the user's intent.
+
+USER MESSAGE: "{message}"
 
 CLASSIFICATION RULES:
-1. "ride_request" - User NEEDS a ride (they are a passenger looking for transportation)
-   - Keywords: "need ride", "looking for ride", "need to go", "want to go", "take me to", "I'm going to", "traveling to"
-   - Even if not explicitly stated, if they mention going FROM one place TO another, it's usually a request
+1. "ride_request" = User NEEDS transportation (they want to be a passenger)
+   Examples: "need ride", "want to go", "take me to", "I'm going to X", "traveling from X to Y"
 
-2. "ride_offer" - User is OFFERING a ride (they are a driver with available seats)
-   - Keywords: "offering ride", "have space", "empty seats", "can take", "driving to", "going to [place] and have room"
-   - Must explicitly mention having space/seats available OR offering to take someone
+2. "ride_offer" = User is OFFERING to drive (they have a car and available seats)
+   Examples: "offering ride", "have space", "can take passengers", "driving to X", "have empty seats"
 
-3. "other" - ONLY for: greetings, questions about the service, complaints, or completely irrelevant messages
-   - Do NOT classify legitimate ride requests/offers as "other"
+3. "other" = Greetings, questions, unrelated messages
+   Examples: "hello", "how does this work?", "thanks"
 
-IMPORTANT: Be SMART and LIBERAL in classification. If there's ANY indication of ride intent, classify it as request/offer, NOT "other".
-
-User Message: "{message}"
-
-Analyze carefully and respond with ONLY valid JSON (no markdown, no code blocks):
+RESPOND WITH ONLY THIS JSON FORMAT (no markdown, no code blocks, no extra text):
 {{
     "intent": "ride_request",
     "confidence": 0.95,
-    "reasoning": "User mentions needing transportation from point A to B"
+    "reasoning": "Brief explanation"
 }}
 
-JSON Response:""",
+JSON:""",
 )
 
-# Information Extraction Prompt - IMPROVED VERSION
-# Information Extraction Prompt - ROBUST VERSION
+# Information Extraction Prompt - Chain of Thought
 EXTRACTION_PROMPT = PromptTemplate(
     input_variables=["message", "intent"],
-    template="""You are an AI that extracts structured ride information from natural language messages.
+    template="""You are an expert information extraction AI. Extract structured ride details.
 
 USER MESSAGE: "{message}"
-INTENT: {intent}
+USER INTENT: {intent}
 
-YOUR TASK:
-Extract all ride details from the message. If information is missing, set it to null.
+EXTRACTION TASK:
+Read the message carefully and extract these fields:
+- pickup_location: Starting point (set to null if not mentioned)
+- drop_location: Destination (set to null if not mentioned)
+- date: When the ride is needed - "today", "tomorrow", specific date (null if not mentioned)
+- time: Time of day - "5pm", "10:00 AM", "morning", "afternoon" (null if not mentioned)
+- passengers: Number of people (for ride_request only, default to 1 if not specified)
+- available_seats: Number of seats available (for ride_offer only)
+- additional_info: Any other details (null if none)
 
-FIELD DEFINITIONS:
-- pickup_location: Where the ride starts (any location mentioned as origin)
-- drop_location: Where the ride ends (destination)
-- date: When the ride is needed (today/tomorrow/specific date)
-- time: What time (extract as-is: "5pm", "10:00 AM", "noon", etc.)
-- passengers: Number of people needing ride (default to 1 if not mentioned for ride_request)
-- available_seats: Number of seats available (only for ride_offer)
-- additional_info: Any other relevant details
+CRITICAL INSTRUCTIONS:
+1. Extract EXACTLY what is mentioned - do not assume or infer
+2. If a field is not mentioned, set it to null
+3. For ride_request: If passengers not mentioned, set to 1
+4. For ride_offer: If available_seats not mentioned, set to null
+5. Keep location names as mentioned (don't modify them)
+6. Keep time format as mentioned (don't convert)
 
-EXTRACTION EXAMPLES:
+STEP-BY-STEP PROCESS:
+Step 1: Read the message word by word
+Step 2: Identify locations mentioned (which is pickup? which is drop?)
+Step 3: Find date references (today, tomorrow, specific dates)
+Step 4: Find time references (5pm, morning, etc.)
+Step 5: Count passengers or seats mentioned
+Step 6: Construct the JSON
+
+EXAMPLE EXTRACTIONS:
 
 Example 1:
-Message: "Need ride to airport tomorrow 5pm"
+Message: "Need ride to airport tomorrow at 5pm"
+Think: No pickup mentioned, drop is "airport", date is "tomorrow", time is "5pm", no passenger count so default 1
+Output:
 {{
     "details": {{
         "pickup_location": null,
@@ -71,7 +82,9 @@ Message: "Need ride to airport tomorrow 5pm"
 }}
 
 Example 2:
-Message: "Going from DHA to Clifton at 3pm today, need ride for 2 people"
+Message: "Going from DHA to Clifton at 3pm today, 2 people"
+Think: pickup is "DHA", drop is "Clifton", date is "today", time is "3pm", passengers is 2
+Output:
 {{
     "details": {{
         "pickup_location": "DHA",
@@ -87,7 +100,9 @@ Message: "Going from DHA to Clifton at 3pm today, need ride for 2 people"
 }}
 
 Example 3:
-Message: "Driving to mall tomorrow afternoon, have 3 seats"
+Message: "Driving to mall tomorrow afternoon, 3 seats available"
+Think: No pickup, drop is "mall", date is "tomorrow", time is "afternoon", available_seats is 3
+Output:
 {{
     "details": {{
         "pickup_location": null,
@@ -102,61 +117,68 @@ Message: "Driving to mall tomorrow afternoon, have 3 seats"
     "is_complete": false
 }}
 
-RULES:
-1. Extract what IS mentioned, don't make assumptions
-2. For ride_request: Mark complete if has pickup, drop, date, time, passengers (default 1)
-3. For ride_offer: Mark complete if has pickup, drop, date, time, available_seats
-4. missing_fields should list ONLY required fields that are null
-5. Return ONLY valid JSON, no extra text
+NOW EXTRACT FROM THE MESSAGE ABOVE.
 
-NOW EXTRACT FROM THE USER MESSAGE ABOVE:
-""",
+RESPOND WITH ONLY THIS JSON FORMAT (no markdown, no code blocks, no explanation):
+{{
+    "details": {{...}},
+    "missing_fields": [...],
+    "is_complete": true/false
+}}
+
+JSON:""",
 )
 
-
-# Clarifying Question Generator - ROBUST VERSION
+# Clarifying Question Generator
 CLARIFICATION_PROMPT = PromptTemplate(
     input_variables=["intent", "missing_fields", "existing_details"],
-    template="""Generate ONE friendly question to get the most important missing information.
+    template="""Generate ONE natural, friendly question to get missing information.
 
-Missing fields: {missing_fields}
-Already known: {existing_details}
-Intent: {intent}
+CONTEXT:
+- Intent: {intent}
+- Missing: {missing_fields}
+- Already have: {existing_details}
 
-Ask for the FIRST missing field in this priority order:
+QUESTION PRIORITY:
 1. pickup_location → "Where will you be starting from?"
-2. drop_location → "Where do you need to go?"
+2. drop_location → "Where do you need to go?" / "Where are you heading?"
 3. date → "When do you need this ride? (today/tomorrow/specific date)"
-4. time → "What time? (e.g., 5pm, morning, afternoon)"
+4. time → "What time do you need the ride?"
 5. passengers → "How many passengers will be traveling?"
 6. available_seats → "How many seats do you have available?"
 
-Return ONLY the question text, nothing else:""",
+RULES:
+- Ask about the FIRST missing field only
+- Be conversational and friendly
+- Keep it short and clear
+- Don't ask multiple questions
+
+Return ONLY the question text (no JSON, no quotes):""",
 )
 
-# Confirmation Message Generator - IMPROVED VERSION
+# Confirmation Message Generator
 CONFIRMATION_PROMPT = PromptTemplate(
     input_variables=["intent", "details"],
-    template="""Generate a warm, professional confirmation message.
+    template="""Generate a friendly confirmation message for the ride details.
 
-Intent: {intent}
-Details: {details}
+INTENT: {intent}
+DETAILS: {details}
 
 Create a message that:
-1. Confirms the ride details clearly
-2. Is friendly and reassuring
+1. Confirms all provided details clearly
+2. Uses emojis for visual clarity (📍 for location, 📅 for date, 🕒 for time, 👥 for passengers, 💺 for seats)
 3. Asks user to confirm with "Yes" or make corrections
-4. Uses natural, conversational language
+4. Is warm and professional
 
-Format example:
-"Perfect! Let me confirm your ride:
+FORMAT EXAMPLE:
+"Great! Let me confirm your ride:
 📍 From: [pickup]
 📍 To: [drop]
 📅 Date: [date]
-🕐 Time: [time]
+🕒 Time: [time]
 👥 Passengers: [number]
 
-Is this correct? Reply 'Yes' to confirm or let me know what needs to be changed."
+Is everything correct? Reply 'Yes' to confirm or let me know what to change."
 
-Generate the confirmation message (just the text, no JSON):""",
+Generate the confirmation message (plain text only, no JSON):""",
 )

@@ -240,6 +240,7 @@ dependencies = [
     { name = "google-generativeai" },
     { name = "langchain" },
     { name = "langchain-google-genai" },
+    { name = "langchain-groq" },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "python-multipart" },
@@ -254,6 +255,7 @@ requires-dist = [
     { name = "google-generativeai", specifier = ">=0.8.5" },
     { name = "langchain", specifier = ">=0.3.27" },
     { name = "langchain-google-genai", specifier = ">=2.0.10" },
+    { name = "langchain-groq", specifier = ">=0.3.8" },
     { name = "pydantic", specifier = ">=2.12.4" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "python-multipart", specifier = ">=0.0.20" },
@@ -281,6 +283,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d8/53/6f443c9a4a8358a93a6792e2acffb9d9d5cb0a5cfd8802644b7b1c9a02e4/colorama-0.4.6.tar.gz", hash = "sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44", size = 27697, upload-time = "2022-10-25T02:36:22.414Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d1/d6/3965ed04c63042e047cb6a3e6ed1a63a35087b6a609aa3a15ed8ac56c221/colorama-0.4.6-py2.py3-none-any.whl", hash = "sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6", size = 25335, upload-time = "2022-10-25T02:36:20.889Z" },
+]
+
+[[package]]
+name = "distro"
+version = "1.9.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/fc/f8/98eea607f65de6527f8a2e8885fc8015d3e6f5775df186e443e0964a11c3/distro-1.9.0.tar.gz", hash = "sha256:2fa77c6fd8940f116ee1d6b94a2f90b13b5ea8d019b98bc8bafdcabcdd9bdbed", size = 60722, upload-time = "2023-12-24T09:54:32.31Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/12/b3/231ffd4ab1fc9d679809f356cebee130ac7daa00d6d6f3206dd4fd137e9e/distro-1.9.0-py3-none-any.whl", hash = "sha256:7bffd925d65168f85027d8da9af6bddab658135b840670a223589bc0c8ef02b2", size = 20277, upload-time = "2023-12-24T09:54:30.421Z" },
 ]
 
 [[package]]
@@ -574,6 +585,23 @@ wheels = [
 ]
 
 [[package]]
+name = "groq"
+version = "0.36.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/27/83/932f29aee838dac4ab77d5249c886159f88e157f925de214681cd54b0a1c/groq-0.36.0.tar.gz", hash = "sha256:766fa1ae34918552c6488767b16d4bd0ee3f0fb7809cd9f7760c90d13f32c63a", size = 144596, upload-time = "2025-11-20T02:30:05.446Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/27/79/28f295d5064750674014f50e3c2daf8dc233964c904d357ac2bd0e33fc31/groq-0.36.0-py3-none-any.whl", hash = "sha256:ac7eeae31a5c2e76d30ea678f0b1a9168ff906c4440f5ec3a42ac74d5b4fdb3c", size = 137279, upload-time = "2025-11-20T02:30:04.336Z" },
+]
+
+[[package]]
 name = "grpcio"
 version = "1.76.0"
 source = { registry = "https://pypi.org/simple" }
@@ -785,6 +813,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/0b/9f/788360ec44b4b280d754db92f9e204ddd96bd6730fad8a9ff9b1319c7e71/langchain_google_genai-2.0.10.tar.gz", hash = "sha256:b51067b468853856f275bb7b1a85dbaf4467b59fe67e35fcd614fc0d744c810e", size = 37699, upload-time = "2025-02-21T16:55:55.765Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0b/ce/d2a9c47cdb0684160f5e9717534fc1adc22b326ae70348caa5552dd66953/langchain_google_genai-2.0.10-py3-none-any.whl", hash = "sha256:964a7542fd11fdec7592052b4eaef383227f7c4fa4d754a455e4bf0634f4ad28", size = 41980, upload-time = "2025-02-21T16:55:53.793Z" },
+]
+
+[[package]]
+name = "langchain-groq"
+version = "0.3.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "groq" },
+    { name = "langchain-core" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/da/e5/c305dbb69a2d834d8cfb5ad2a9695046317a392a45943e738747f3dc4163/langchain_groq-0.3.8.tar.gz", hash = "sha256:468d1045f9ca9815f55976535dd082a8d08a21068458f0efe0bb364a1a460779", size = 25566, upload-time = "2025-09-09T20:11:27.367Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e7/fc/c7743e16ef445a2e439924c390aa341aa9bba1b41545904f9c08e869782f/langchain_groq-0.3.8-py3-none-any.whl", hash = "sha256:d7ef98c23f1f4fc9e9e21cddd4e155f3dc989fbe1ff6fefeb52c49c870876219", size = 16860, upload-time = "2025-09-09T20:11:26.35Z" },
 ]
 
 [[package]]
