@@ -174,7 +174,7 @@ class RideSharingLLMService:
             # Update memory with merged details
             self.memory.update_ride_details(session_id, merged_details)
 
-            # Determine required fields
+            # Determine required fields (route is optional, not required)
             required_fields = ["pickup_location", "drop_location", "date", "time"]
             if intent == "ride_request":
                 required_fields.append("passengers")
@@ -266,6 +266,7 @@ class RideSharingLLMService:
             field_questions = {
                 "pickup_location": "Where will you be starting from?",
                 "drop_location": "Where do you need to go?",
+                "route": "Would you like to share your route for better matches? (Optional)",
                 "date": "When do you need this ride? (e.g., today, tomorrow)",
                 "time": "What time do you need the ride?",
                 "passengers": "How many passengers will be traveling?",
@@ -300,6 +301,9 @@ class RideSharingLLMService:
                 msg += f"📍 From: {details.pickup_location}\n"
             if details.drop_location:
                 msg += f"📍 To: {details.drop_location}\n"
+            if details.route:
+                route_str = " → ".join(details.route)
+                msg += f"🛣️ Route: {route_str}\n"
             if details.date:
                 msg += f"📅 Date: {details.date}\n"
             if details.time:

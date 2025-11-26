@@ -45,8 +45,9 @@ YOUR TASK:
 Extract NEW information from the current message and combine it with existing details.
 
 FIELDS TO EXTRACT:
-- pickup_location: Starting point
-- drop_location: Destination
+- pickup_location: Starting point (if route is provided, extract FIRST stop as pickup)
+- drop_location: Destination (if route is provided, extract LAST stop as drop)
+- route: List of stops in order (e.g., ["FAST", "Drigh Road", "Millennium", "Gulshan Chowrangi"]). Extract if user mentions "route:", "via", or lists multiple places with arrows/dashes. Set to null if not mentioned.
 - date: "today", "tomorrow", or specific date
 - time: "5pm", "10:00 AM", "morning", "afternoon"
 - passengers: Number of people (for ride_request, default 1)
@@ -61,10 +62,17 @@ CRITICAL RULES:
    Example: If pickup was "DHA" and user says "Actually, from Clifton" → Update to "Clifton"
 
 3. Extract ONLY what's mentioned in the current message, don't invent data
+4. ROUTE EXTRACTION RULES:
+   - If user provides route like "FAST – Drigh Road – Millennium – Nagan" or "Fast-> kala board ->model colony"
+   - Extract as list: ["FAST", "Drigh Road", "Millennium", "Nagan"]
+   - Set pickup_location = first stop in route
+   - Set drop_location = last stop in route
+   - Clean up arrows (->), dashes (–), and extra spaces
+   - If no route mentioned, set route to null
 
-4. For ride_request: Default passengers to 1 if not mentioned
+5. For ride_request: Default passengers to 1 if not mentioned
 
-5. Return ALL fields (new + existing) in the response
+6. Return ALL fields (new + existing) in the response
 
 EXAMPLES:
 
@@ -88,6 +96,48 @@ Current: "Going from Clifton to mall at 3pm today, 2 people"
 Existing: {{}}
 Extract: {{"pickup_location": "Clifton", "drop_location": "mall", "date": "today", "time": "3pm", "passengers": 2, "available_seats": null, "additional_info": null}}
 
+Example 5 - Route Provided:
+Current: "Route: FAST – Drigh Road – Millennium – Gulshan Chowrangi – Sohrab Goth"
+Existing: {{}}
+Extract: {{
+    "pickup_location": "FAST",
+    "drop_location": "Sohrab Goth",
+    "route": ["FAST", "Drigh Road", "Millennium", "Gulshan Chowrangi", "Sohrab Goth"],
+    "date": null,
+    "time": null,
+    "passengers": 1,
+    "available_seats": null,
+    "additional_info": null
+}}
+
+Example 6 - Route with Arrows:
+Current: "Going Fast-> kala board ->model colony -> kazimabad at 5pm today"
+Existing: {{}}
+Extract: {{
+    "pickup_location": "Fast",
+    "drop_location": "kazimabad",
+    "route": ["Fast", "kala board", "model colony", "kazimabad"],
+    "date": "today",
+    "time": "5pm",
+    "passengers": 1,
+    "available_seats": null,
+    "additional_info": null
+}}
+
+Example 7 - No Route (Normal Message):
+Current: "Need ride from DHA to Airport at 3pm"
+Existing: {{}}
+Extract: {{
+    "pickup_location": "DHA",
+    "drop_location": "Airport",
+    "route": null,
+    "date": null,
+    "time": "3pm",
+    "passengers": 1,
+    "available_seats": null,
+    "additional_info": null
+}}
+
 NOW EXTRACT FROM THE CURRENT MESSAGE ABOVE.
 
 RESPOND WITH ONLY THIS JSON (no markdown, no explanation):
@@ -95,6 +145,7 @@ RESPOND WITH ONLY THIS JSON (no markdown, no explanation):
     "details": {{
         "pickup_location": ...,
         "drop_location": ...,
+        "route": [...] or null,
         "date": ...,
         "time": ...,
         "passengers": ...,
@@ -149,10 +200,16 @@ CONTEXT:
 QUESTION PRIORITY:
 1. pickup_location → "Where will you be starting from?"
 2. drop_location → "Where do you need to go?" / "Where are you heading?"
-3. date → "When do you need this ride? (today/tomorrow/specific date)"
-4. time → "What time do you need the ride?"
-5. passengers → "How many passengers will be traveling?"
-6. available_seats → "How many seats do you have available?"
+3. route → "Could you share your route? (Optional - helps find better matches)"
+4. date → "When do you need this ride? (today/tomorrow/specific date)"
+5. time → "What time do you need the ride?"
+6. passengers → "How many passengers will be traveling?"
+7. available_seats → "How many seats do you have available?"
+
+SPECIAL RULE FOR ROUTE:
+- Route is OPTIONAL. If pickup and drop are already provided, DO NOT ask for route.
+- Only suggest route if user seems open to providing more details.
+- Keep the tone casual: "Would you like to share your route for better matches? (Optional)"
 
 RULES:
 - Ask about the FIRST missing field only
@@ -181,6 +238,7 @@ FORMAT EXAMPLE:
 "Great! Let me confirm your ride:
 📍 From: [pickup]
 📍 To: [drop]
+🛣️ Route: [stop1 → stop2 → stop3] (if provided, otherwise skip this line)
 📅 Date: [date]
 🕒 Time: [time]
 👥 Passengers: [number]

@@ -226,12 +226,19 @@ with col2:
                     icon = {
                         "pickup_location": "📍",
                         "drop_location": "🎯",
+                        "route": "🛣️",
                         "date": "📅",
                         "time": "🕒",
                         "passengers": "👥",
                         "available_seats": "💺",
                     }.get(key, "•")
-                    st.markdown(f"{icon} **{key.replace('_', ' ').title()}:** {value}")
+                    if key == "route" and isinstance(value, list):
+                        route_display = " → ".join(value)
+                        st.markdown(f"{icon} **Route:** {route_display}")
+                    else:
+                        st.markdown(
+                            f"{icon} **{key.replace('_', ' ').title()}:** {value}"
+                        )
             else:
                 st.info("No details yet")
         else:

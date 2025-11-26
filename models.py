@@ -16,6 +16,7 @@ class RideDetails(BaseModel):
 
     pickup_location: Optional[str] = None
     drop_location: Optional[str] = None
+    route: Optional[list[str]] = None
     date: Optional[str] = None
     time: Optional[str] = None
     passengers: Optional[int] = None  # For ride requests
