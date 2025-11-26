@@ -1,6 +1,6 @@
 from langchain.prompts import PromptTemplate
 
-# Intent Classification Prompt - Ultra Robust
+# Intent Classification Prompt
 INTENT_CLASSIFICATION_PROMPT = PromptTemplate(
     input_variables=["message"],
     template="""You are a ride-sharing classification AI. Classify the user's intent.
@@ -27,7 +27,88 @@ RESPOND WITH ONLY THIS JSON FORMAT (no markdown, no code blocks, no extra text):
 JSON:""",
 )
 
-# Information Extraction Prompt - Chain of Thought
+# Context-Aware Extraction Prompt - NEW!
+CONTEXT_AWARE_EXTRACTION_PROMPT = PromptTemplate(
+    input_variables=["message", "intent", "conversation_history", "existing_details"],
+    template="""You are an expert information extraction AI with conversation memory.
+
+CURRENT MESSAGE: "{message}"
+USER INTENT: {intent}
+
+CONVERSATION HISTORY:
+{conversation_history}
+
+EXISTING DETAILS FROM PREVIOUS MESSAGES:
+{existing_details}
+
+YOUR TASK:
+Extract NEW information from the current message and combine it with existing details.
+
+FIELDS TO EXTRACT:
+- pickup_location: Starting point
+- drop_location: Destination
+- date: "today", "tomorrow", or specific date
+- time: "5pm", "10:00 AM", "morning", "afternoon"
+- passengers: Number of people (for ride_request, default 1)
+- available_seats: Number of seats (for ride_offer only)
+- additional_info: Any other relevant details
+
+CRITICAL RULES:
+1. If the user is ANSWERING a question, extract that specific information
+   Example: Bot asked "Where from?" → User says "DHA" → Extract pickup_location: "DHA"
+
+2. If a field already has a value in EXISTING DETAILS, keep it UNLESS the user explicitly changes it
+   Example: If pickup was "DHA" and user says "Actually, from Clifton" → Update to "Clifton"
+
+3. Extract ONLY what's mentioned in the current message, don't invent data
+
+4. For ride_request: Default passengers to 1 if not mentioned
+
+5. Return ALL fields (new + existing) in the response
+
+EXAMPLES:
+
+Example 1 - First Message:
+Current: "Need ride to airport tomorrow"
+Existing: {{}}
+Extract: {{"pickup_location": null, "drop_location": "airport", "date": "tomorrow", "time": null, "passengers": 1, "available_seats": null, "additional_info": null}}
+
+Example 2 - Follow-up Answer:
+Current: "From DHA"
+Existing: {{"drop_location": "airport", "date": "tomorrow", "passengers": 1}}
+Extract: {{"pickup_location": "DHA", "drop_location": "airport", "date": "tomorrow", "time": null, "passengers": 1, "available_seats": null, "additional_info": null}}
+
+Example 3 - Adding More Details:
+Current: "5pm please"
+Existing: {{"pickup_location": "DHA", "drop_location": "airport", "date": "tomorrow", "passengers": 1}}
+Extract: {{"pickup_location": "DHA", "drop_location": "airport", "date": "tomorrow", "time": "5pm", "passengers": 1, "available_seats": null, "additional_info": null}}
+
+Example 4 - Complete from Start:
+Current: "Going from Clifton to mall at 3pm today, 2 people"
+Existing: {{}}
+Extract: {{"pickup_location": "Clifton", "drop_location": "mall", "date": "today", "time": "3pm", "passengers": 2, "available_seats": null, "additional_info": null}}
+
+NOW EXTRACT FROM THE CURRENT MESSAGE ABOVE.
+
+RESPOND WITH ONLY THIS JSON (no markdown, no explanation):
+{{
+    "details": {{
+        "pickup_location": ...,
+        "drop_location": ...,
+        "date": ...,
+        "time": ...,
+        "passengers": ...,
+        "available_seats": ...,
+        "additional_info": ...
+    }},
+    "missing_fields": [...],
+    "is_complete": true/false
+}}
+
+JSON:""",
+)
+
+# Original Extraction Prompt (kept as backup)
 EXTRACTION_PROMPT = PromptTemplate(
     input_variables=["message", "intent"],
     template="""You are an expert information extraction AI. Extract structured ride details.
@@ -45,81 +126,7 @@ Read the message carefully and extract these fields:
 - available_seats: Number of seats available (for ride_offer only)
 - additional_info: Any other details (null if none)
 
-CRITICAL INSTRUCTIONS:
-1. Extract EXACTLY what is mentioned - do not assume or infer
-2. If a field is not mentioned, set it to null
-3. For ride_request: If passengers not mentioned, set to 1
-4. For ride_offer: If available_seats not mentioned, set to null
-5. Keep location names as mentioned (don't modify them)
-6. Keep time format as mentioned (don't convert)
-
-STEP-BY-STEP PROCESS:
-Step 1: Read the message word by word
-Step 2: Identify locations mentioned (which is pickup? which is drop?)
-Step 3: Find date references (today, tomorrow, specific dates)
-Step 4: Find time references (5pm, morning, etc.)
-Step 5: Count passengers or seats mentioned
-Step 6: Construct the JSON
-
-EXAMPLE EXTRACTIONS:
-
-Example 1:
-Message: "Need ride to airport tomorrow at 5pm"
-Think: No pickup mentioned, drop is "airport", date is "tomorrow", time is "5pm", no passenger count so default 1
-Output:
-{{
-    "details": {{
-        "pickup_location": null,
-        "drop_location": "airport",
-        "date": "tomorrow",
-        "time": "5pm",
-        "passengers": 1,
-        "available_seats": null,
-        "additional_info": null
-    }},
-    "missing_fields": ["pickup_location"],
-    "is_complete": false
-}}
-
-Example 2:
-Message: "Going from DHA to Clifton at 3pm today, 2 people"
-Think: pickup is "DHA", drop is "Clifton", date is "today", time is "3pm", passengers is 2
-Output:
-{{
-    "details": {{
-        "pickup_location": "DHA",
-        "drop_location": "Clifton",
-        "date": "today",
-        "time": "3pm",
-        "passengers": 2,
-        "available_seats": null,
-        "additional_info": null
-    }},
-    "missing_fields": [],
-    "is_complete": true
-}}
-
-Example 3:
-Message: "Driving to mall tomorrow afternoon, 3 seats available"
-Think: No pickup, drop is "mall", date is "tomorrow", time is "afternoon", available_seats is 3
-Output:
-{{
-    "details": {{
-        "pickup_location": null,
-        "drop_location": "mall",
-        "date": "tomorrow",
-        "time": "afternoon",
-        "passengers": null,
-        "available_seats": 3,
-        "additional_info": null
-    }},
-    "missing_fields": ["pickup_location"],
-    "is_complete": false
-}}
-
-NOW EXTRACT FROM THE MESSAGE ABOVE.
-
-RESPOND WITH ONLY THIS JSON FORMAT (no markdown, no code blocks, no explanation):
+RESPOND WITH ONLY THIS JSON (no markdown):
 {{
     "details": {{...}},
     "missing_fields": [...],

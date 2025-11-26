@@ -326,19 +326,8 @@ class RideSharingLLMService:
         # Add user message to memory
         self.memory.add_user_message(session_id, message)
 
-        # CHECK IF CONVERSATION IS ALREADY IN PROGRESS
-        session = self.memory.get_session(session_id)
-        if session.current_intent and session.current_intent != "other" and not session.is_complete:
-            # Don't re-classify, use existing intent
-            print(f"🔄 Continuing existing conversation with intent: {session.current_intent}")
-            intent_result = IntentResponse(
-                intent=session.current_intent,
-                confidence=0.95,
-                reasoning="Continuing existing conversation flow"
-            )
-        else:
-            # Step 1: Classify intent
-            intent_result = self.classify_intent(message, session_id)
+        # Step 1: Classify intent
+        intent_result = self.classify_intent(message, session_id)
 
         if intent_result.intent == "other":
             print(f"ℹ️ Intent classified as 'other' - sending greeting\n")
