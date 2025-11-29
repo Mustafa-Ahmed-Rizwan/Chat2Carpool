@@ -181,6 +181,138 @@ with col1:
             except Exception as e:
                 st.error(f"❌ Error: {str(e)}")
 
+# Match Management Section
+st.markdown("---")
+st.header("🎯 Match Management")
+
+col_match1, col_match2 = st.columns(2)
+
+with col_match1:
+    if st.button("📋 View My Matches", use_container_width=True):
+        try:
+            response = requests.get(
+                f"{API_BASE}/my-matches",
+                params={"session_id": st.session_state.session_id},
+                timeout=10,
+            )
+            if response.status_code == 200:
+                result = response.json()
+                if result["success"]:
+                    matches = result.get("matches", [])
+
+                    if matches:
+                        st.success(f"Found {len(matches)} pending match(es)")
+
+                        for match in matches:
+                            with st.expander(
+                                f"Match #{match['match_id']} - {match['match_type']} ({int(match['match_score']*100)}% match)"
+                            ):
+                                st.markdown(f"**Role:** {match['role'].title()}")
+                                st.markdown(f"**📍 From:** {match['pickup']}")
+                                st.markdown(f"**🎯 To:** {match['drop']}")
+                                st.markdown(f"**📅 Date:** {match['date']}")
+                                st.markdown(f"**🕒 Time:** {match['time']}")
+                                st.markdown(f"**👥 Passengers:** {match['passengers']}")
+                                st.markdown(
+                                    f"**💺 Remaining Seats:** {match['remaining_seats']}"
+                                )
+
+                                col_a, col_b = st.columns(2)
+                                with col_a:
+                                    if st.button(
+                                        f"✅ Confirm",
+                                        key=f"confirm_{match['match_id']}",
+                                    ):
+                                        confirm_response = requests.post(
+                                            f"{API_BASE}/confirm-match",
+                                            params={
+                                                "match_id": match["match_id"],
+                                                "session_id": st.session_state.session_id,
+                                            },
+                                            timeout=10,
+                                        )
+                                        if confirm_response.status_code == 200:
+                                            confirm_result = confirm_response.json()
+                                            if confirm_result["success"]:
+                                                st.success(confirm_result["message"])
+                                                st.rerun()
+                                            else:
+                                                st.error(confirm_result["message"])
+                                        else:
+                                            st.error("Failed to confirm match")
+
+                                with col_b:
+                                    if st.button(
+                                        f"❌ Reject", key=f"reject_{match['match_id']}"
+                                    ):
+                                        reject_response = requests.post(
+                                            f"{API_BASE}/reject-match",
+                                            params={
+                                                "match_id": match["match_id"],
+                                                "session_id": st.session_state.session_id,
+                                            },
+                                            timeout=10,
+                                        )
+                                        if reject_response.status_code == 200:
+                                            st.success("Match rejected")
+                                            st.rerun()
+                                        else:
+                                            st.error("Failed to reject match")
+                    else:
+                        st.info("No pending matches found")
+                else:
+                    st.warning(result["message"])
+            else:
+                st.error(f"Error: {response.status_code}")
+        except Exception as e:
+            st.error(f"Error: {e}")
+
+with col_match2:
+    match_id_input = st.number_input(
+        "Or enter Match ID directly:", min_value=1, step=1, key="match_id_input"
+    )
+
+    col_confirm, col_reject = st.columns(2)
+    with col_confirm:
+        if st.button("✅ Confirm Match", use_container_width=True):
+            try:
+                response = requests.post(
+                    f"{API_BASE}/confirm-match",
+                    params={
+                        "match_id": match_id_input,
+                        "session_id": st.session_state.session_id,
+                    },
+                    timeout=10,
+                )
+                if response.status_code == 200:
+                    result = response.json()
+                    if result["success"]:
+                        st.success(result["message"])
+                    else:
+                        st.error(result["message"])
+                else:
+                    st.error("Failed to confirm match")
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+    with col_reject:
+        if st.button("❌ Reject Match", use_container_width=True):
+            try:
+                response = requests.post(
+                    f"{API_BASE}/reject-match",
+                    params={
+                        "match_id": match_id_input,
+                        "session_id": st.session_state.session_id,
+                    },
+                    timeout=10,
+                )
+                if response.status_code == 200:
+                    st.success("Match rejected")
+                else:
+                    st.error("Failed to reject match")
+            except Exception as e:
+                st.error(f"Error: {e}")
+
 with col2:
     st.subheader("📊 Analysis")
 

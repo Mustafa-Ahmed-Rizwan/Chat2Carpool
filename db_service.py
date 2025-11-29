@@ -112,3 +112,217 @@ class DatabaseService:
     def get_matches_for_offer(db: Session, offer_id: int) -> List[Match]:
         """Get all matches for a specific offer"""
         return db.query(Match).filter(Match.offer_id == offer_id).all()
+
+    @staticmethod
+    def confirm_match(
+        db: Session, match_id: int, user_id: str
+    ) -> Dict[str, Any]:
+        """
+        Confirm a match and update all related records
+
+        Returns:
+            Dict with success status and updated records
+        """
+        try:
+            # Get the match
+            match = db.query(Match).filter(Match.id == match_id).first()
+
+            if not match:
+                return {"success": False, "error": "Match not found"}
+
+            # Get the request and offer
+            request = db.query(RideRequest).filter(RideRequest.id == match.request_id).first()
+            offer = db.query(RideOffer).filter(RideOffer.id == match.offer_id).first()
+
+            if not request or not offer:
+                return {"success": False, "error": "Request or Offer not found"}
+
+            # Verify the user owns either the request or offer
+            if request.user_id != user_id and offer.user_id != user_id:
+                return {"success": False, "error": "Unauthorized - this match doesn't belong to you"}
+
+            # Check if match already accepted
+            if match.status == "accepted":
+                return {"success": False, "error": "Match already confirmed"}
+
+            # Check if offer has available seats
+            remaining_seats = offer.available_seats - offer.seats_filled
+            if remaining_seats < request.passengers:
+                return {"success": False, "error": "Not enough seats available"}
+
+            # Update match status
+            match.status = "accepted"
+
+            # Update request - mark as matched
+            request.is_matched = True
+            request.matched_with = offer.id
+            request.is_active = False  # Deactivate so it won't appear in future searches
+
+            # Update offer - increment seats filled
+            offer.seats_filled += request.passengers
+
+            # If all seats are now filled, deactivate the offer
+            if offer.seats_filled >= offer.available_seats:
+                offer.is_active = False
+
+            # Commit all changes
+            db.commit()
+            db.refresh(match)
+            db.refresh(request)
+            db.refresh(offer)
+
+            print(f"✅ Match confirmed: Match ID={match_id}")
+            print(f"   Request {request.id} matched with Offer {offer.id}")
+            print(f"   Offer seats: {offer.seats_filled}/{offer.available_seats}")
+            print(f"   Offer active: {offer.is_active}")
+
+            return {
+                "success": True,
+                "match": match,
+                "request": request,
+                "offer": offer,
+                "offer_still_active": offer.is_active,
+                "remaining_seats": offer.available_seats - offer.seats_filled
+            }
+
+        except Exception as e:
+            db.rollback()
+            print(f"❌ Error confirming match: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"success": False, "error": str(e)}
+
+
+    @staticmethod
+    def get_user_matches(db: Session, user_id: str) -> List[Dict[str, Any]]:
+        """
+        Get all matches for a user (both as requester and offerer)
+
+        Returns:
+            List of matches with full details
+        """
+        # Get user's requests
+        user_requests = db.query(RideRequest).filter(
+            RideRequest.user_id == user_id,
+            RideRequest.is_active == True
+        ).all()
+
+        # Get user's offers
+        user_offers = db.query(RideOffer).filter(
+            RideOffer.user_id == user_id,
+            RideOffer.is_active == True
+        ).all()
+
+        matches = []
+
+        # Get matches for user's requests
+        for request in user_requests:
+            request_matches = db.query(Match).filter(
+                Match.request_id == request.id,
+                Match.status == "pending"
+            ).all()
+
+            for match in request_matches:
+                offer = db.query(RideOffer).filter(RideOffer.id == match.offer_id).first()
+                if offer:
+                    matches.append({
+                        "match_id": match.id,
+                        "match_type": match.match_type,
+                        "match_score": match.match_score,
+                        "status": match.status,
+                        "role": "requester",
+                        "request": request,
+                        "offer": offer,
+                        "remaining_seats": offer.available_seats - offer.seats_filled
+                    })
+
+        # Get matches for user's offers
+        for offer in user_offers:
+            offer_matches = db.query(Match).filter(
+                Match.offer_id == offer.id,
+                Match.status == "pending"
+            ).all()
+
+            for match in offer_matches:
+                request = db.query(RideRequest).filter(RideRequest.id == match.request_id).first()
+                if request:
+                    matches.append({
+                        "match_id": match.id,
+                        "match_type": match.match_type,
+                        "match_score": match.match_score,
+                        "status": match.status,
+                        "role": "offerer",
+                        "request": request,
+                        "offer": offer,
+                        "remaining_seats": offer.available_seats - offer.seats_filled
+                    })
+
+        return matches
+
+
+    @staticmethod
+    def reject_match(db: Session, match_id: int, user_id: str) -> Dict[str, Any]:
+        """
+        Reject/cancel a match
+        """
+        try:
+            match = db.query(Match).filter(Match.id == match_id).first()
+
+            if not match:
+                return {"success": False, "error": "Match not found"}
+
+            # Get the request and offer to verify ownership
+            request = db.query(RideRequest).filter(RideRequest.id == match.request_id).first()
+            offer = db.query(RideOffer).filter(RideOffer.id == match.offer_id).first()
+
+            if not request or not offer:
+                return {"success": False, "error": "Request or Offer not found"}
+
+            # Verify ownership
+            if request.user_id != user_id and offer.user_id != user_id:
+                return {"success": False, "error": "Unauthorized"}
+
+            # Update match status
+            match.status = "rejected"
+
+            db.commit()
+            db.refresh(match)
+
+            print(f"✅ Match rejected: Match ID={match_id}")
+
+            return {
+                "success": True,
+                "match": match
+            }
+
+        except Exception as e:
+            db.rollback()
+            print(f"❌ Error rejecting match: {e}")
+            return {"success": False, "error": str(e)}
+
+
+    @staticmethod
+    def get_match_details(db: Session, match_id: int) -> Dict[str, Any]:
+        """
+        Get full details of a specific match
+        """
+        match = db.query(Match).filter(Match.id == match_id).first()
+
+        if not match:
+            return None
+
+        request = db.query(RideRequest).filter(RideRequest.id == match.request_id).first()
+        offer = db.query(RideOffer).filter(RideOffer.id == match.offer_id).first()
+
+        if not request or not offer:
+            return None
+
+        return {
+            "match_id": match.id,
+            "match_type": match.match_type,
+            "match_score": match.match_score,
+            "status": match.status,
+            "request": request,
+            "offer": offer,
+            "remaining_seats": offer.available_seats - offer.seats_filled
+        }

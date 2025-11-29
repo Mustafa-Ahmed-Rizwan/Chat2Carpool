@@ -218,6 +218,190 @@ def clear_all_sessions():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/confirm-match")
+async def confirm_match_endpoint(match_id: int, session_id: str):
+    """
+    Confirm a match - updates DB and deactivates matched records
+    """
+    from database import SessionLocal
+    from db_service import DatabaseService
+
+    db = SessionLocal()
+
+    try:
+        print(f"\n{'='*60}")
+        print(f"✅ CONFIRMING MATCH")
+        print(f"{'='*60}")
+        print(f"Match ID: {match_id}")
+        print(f"Session ID: {session_id}")
+
+        # Confirm the match
+        result = DatabaseService.confirm_match(db, match_id, session_id)
+
+        if not result["success"]:
+            return {"success": False, "message": result["error"]}
+
+        # Generate response message
+        offer = result["offer"]
+        request = result["request"]
+
+        response_msg = f"🎉 Match Confirmed Successfully!\n\n"
+        response_msg += f"📋 Ride Details:\n"
+        response_msg += f"📍 From: {offer.pickup_location}\n"
+        response_msg += f"🎯 To: {offer.drop_location}\n"
+        response_msg += f"📅 Date: {offer.date}\n"
+        response_msg += f"🕒 Time: {offer.time}\n"
+        response_msg += f"👥 Passengers: {request.passengers}\n\n"
+
+        if result["offer_still_active"]:
+            response_msg += f"💺 Driver still has {result['remaining_seats']} seat(s) available for others.\n\n"
+        else:
+            response_msg += (
+                f"💺 All seats are now filled. Ride offer has been completed.\n\n"
+            )
+
+        response_msg += f"📞 Contact details will be shared separately.\n"
+        response_msg += f"🚗 Have a safe journey!"
+
+        return {
+            "success": True,
+            "message": response_msg,
+            "data": {
+                "match_id": match_id,
+                "request_id": request.id,
+                "offer_id": offer.id,
+                "offer_still_active": result["offer_still_active"],
+                "remaining_seats": result["remaining_seats"],
+            },
+        }
+
+    except Exception as e:
+        print(f"❌ Error in confirm match endpoint: {e}")
+        import traceback
+
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@app.get("/my-matches")
+async def get_my_matches(session_id: str):
+    """
+    Get all pending matches for a user
+    """
+    from database import SessionLocal
+    from db_service import DatabaseService
+
+    db = SessionLocal()
+
+    try:
+        matches = DatabaseService.get_user_matches(db, session_id)
+
+        if not matches:
+            return {
+                "success": True,
+                "message": "No pending matches found",
+                "matches": [],
+            }
+
+        # Format response
+        formatted_matches = []
+        for match in matches:
+            formatted_matches.append(
+                {
+                    "match_id": match["match_id"],
+                    "role": match["role"],
+                    "match_type": match["match_type"],
+                    "match_score": match["match_score"],
+                    "status": match["status"],
+                    "pickup": match["offer"].pickup_location,
+                    "drop": match["offer"].drop_location,
+                    "date": match["offer"].date,
+                    "time": match["offer"].time,
+                    "passengers": match["request"].passengers,
+                    "remaining_seats": match["remaining_seats"],
+                }
+            )
+
+        return {
+            "success": True,
+            "message": f"Found {len(matches)} pending match(es)",
+            "matches": formatted_matches,
+        }
+
+    except Exception as e:
+        print(f"❌ Error getting matches: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@app.post("/reject-match")
+async def reject_match_endpoint(match_id: int, session_id: str):
+    """
+    Reject a match
+    """
+    from database import SessionLocal
+    from db_service import DatabaseService
+
+    db = SessionLocal()
+
+    try:
+        result = DatabaseService.reject_match(db, match_id, session_id)
+
+        if not result["success"]:
+            return {"success": False, "message": result["error"]}
+
+        return {"success": True, "message": "Match rejected successfully"}
+
+    except Exception as e:
+        print(f"❌ Error rejecting match: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@app.get("/match-details/{match_id}")
+async def get_match_details_endpoint(match_id: int, session_id: str):
+    """
+    Get detailed information about a specific match
+    """
+    from database import SessionLocal
+    from db_service import DatabaseService
+
+    db = SessionLocal()
+
+    try:
+        details = DatabaseService.get_match_details(db, match_id)
+
+        if not details:
+            raise HTTPException(status_code=404, detail="Match not found")
+
+        return {
+            "success": True,
+            "data": {
+                "match_id": details["match_id"],
+                "match_type": details["match_type"],
+                "match_score": details["match_score"],
+                "status": details["status"],
+                "pickup": details["offer"].pickup_location,
+                "drop": details["offer"].drop_location,
+                "route": details["offer"].route,
+                "date": details["offer"].date,
+                "time": details["offer"].time,
+                "passengers": details["request"].passengers,
+                "remaining_seats": details["remaining_seats"],
+            },
+        }
+
+    except Exception as e:
+        print(f"❌ Error getting match details: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
 # Graceful shutdown
 @app.on_event("shutdown")
 def shutdown_event():
