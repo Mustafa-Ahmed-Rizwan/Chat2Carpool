@@ -7,6 +7,7 @@ from typing import Dict, Any
 from llm_service import RideSharingLLMService
 from models import ProcessedMessage
 from memory_manager import memory_manager
+from metrics import init_metrics
 
 load_dotenv()
 
@@ -28,6 +29,11 @@ def validate_response(result: Dict[str, Any]) -> Dict[str, Any]:
         "next_action": result.get("next_action", "awaiting_input"),
     }
 
+
+@app.on_event("startup")
+async def startup_event():
+    # Start metrics server on port 8000
+    init_metrics(port=8000)
 
 @app.get("/")
 def read_root():

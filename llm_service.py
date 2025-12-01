@@ -13,6 +13,8 @@ from prompts import (
 )
 from models import IntentResponse, ExtractionResponse, RideDetails
 from memory_manager import memory_manager
+import time
+from metrics import INTENT_COUNTER, LLM_LATENCY, DB_OPERATION_COUNTER, MATCH_COUNTER
 
 load_dotenv()
 
@@ -22,7 +24,8 @@ class RideSharingLLMService:
 
     def __init__(self):
         self.llm = ChatGroq(
-            model="llama-3.3-70b-versatile",
+            # model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",
             api_key=os.getenv("GROQ_API_KEY"),
             temperature=0.0,
         )
@@ -69,12 +72,20 @@ class RideSharingLLMService:
                 # Save to database
                 if intent == "ride_request":
                     ride_entry = DatabaseService.save_ride_request(db, session_id, user_id, details)
+                    
+                    # --- METRIC: Record Successful DB Save ---
+                    DB_OPERATION_COUNTER.labels(operation="save_request", status="success").inc()
 
                     # Find matches
                     print(f"\n🔍 Starting matching process...")
                     available_offers = DatabaseService.get_active_ride_offers(db, date=details.get("date"))
 
                     matches = MatchingService.find_matches(ride_entry, available_offers)
+
+                    # --- METRIC: Record Matches Found ---
+                    if matches:
+                        print(f"📈 Metric: Recording {len(matches)} matches found")
+                        MATCH_COUNTER.labels(type="found").inc(len(matches))
 
                     # Save matches to database
                     for match in matches:
@@ -104,6 +115,9 @@ class RideSharingLLMService:
 
                 elif intent == "ride_offer":
                     ride_entry = DatabaseService.save_ride_offer(db, session_id, user_id, details)
+                    
+                    # --- METRIC: Record Successful DB Save ---
+                    DB_OPERATION_COUNTER.labels(operation="save_offer", status="success").inc()
 
                     # Find matching requests for this offer
                     print(f"\n🔍 Checking for matching requests...")
@@ -122,6 +136,11 @@ class RideSharingLLMService:
                                 match_score=matches[0]["overall_score"]
                             )
                             matches_count += 1
+                    
+                    # --- METRIC: Record Matches Found ---
+                    if matches_count > 0:
+                        print(f"📈 Metric: Recording {matches_count} matches found")
+                        MATCH_COUNTER.labels(type="found").inc(matches_count)
 
                     response_msg = (
                         f"✅ Your ride offer has been posted successfully!\n\n"
@@ -162,6 +181,9 @@ class RideSharingLLMService:
                 print(f"\n❌ DATABASE ERROR: {e}")
                 import traceback
                 traceback.print_exc()
+                
+                # --- METRIC: Record DB Error ---
+                DB_OPERATION_COUNTER.labels(operation="save_db", status="error").inc()
 
                 return {
                     "status": "error",
@@ -191,7 +213,6 @@ class RideSharingLLMService:
             result = self.process_message(message, session_id)
 
             return result
-
     def _parse_json_response(self, response_text: str) -> dict:
         """Robust JSON parsing with cleaning"""
         text = response_text.strip()
@@ -212,6 +233,7 @@ class RideSharingLLMService:
         return json.loads(text)
 
     def classify_intent(self, message: str, session_id: str) -> IntentResponse:
+        start_time = time.time()
         """Classify message intent with conversation context"""
         try:
             print(f"\n{'='*60}")
@@ -232,11 +254,19 @@ class RideSharingLLMService:
 
             chain = INTENT_CLASSIFICATION_PROMPT | self.llm
             response = chain.invoke({"message": message})
+            
+            # --- METRIC: Record LLM Duration ---
+            duration = time.time() - start_time
+            LLM_LATENCY.labels(operation="classify").observe(duration)
             result_text = response.content.strip()
 
             print(f"🤖 LLM Raw Response:\n{result_text}")
 
             result = self._parse_json_response(result_text)
+            
+            # --- METRIC: Record Intent Type ---
+            intent_type = result.get("intent", "unknown")
+            INTENT_COUNTER.labels(intent_type=intent_type).inc()
 
             print(f"✅ Parsed Intent: {result['intent']}")
             print(f"✅ Confidence: {result['confidence']}")
@@ -280,6 +310,7 @@ class RideSharingLLMService:
     def extract_information(
         self, message: str, intent: str, session_id: str
     ) -> ExtractionResponse:
+        start_time = time.time()
         """Extract ride details from message using conversation context"""
         try:
             print(f"\n{'='*60}")
@@ -314,6 +345,11 @@ class RideSharingLLMService:
                     "existing_details": json.dumps(existing_details),
                 }
             )
+            
+            # --- METRIC: Record Duration ---
+            duration = time.time() - start_time
+            LLM_LATENCY.labels(operation="extract").observe(duration)
+            
             result_text = response.content.strip()
 
             print(f"\n🤖 LLM Raw Response:")
