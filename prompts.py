@@ -1,54 +1,30 @@
 from langchain.prompts import PromptTemplate
 
 # Intent Classification Prompt
-# prompts.py
-
 INTENT_CLASSIFICATION_PROMPT = PromptTemplate(
     input_variables=["message"],
-    template="""You are a strict logic engine for a carpooling app. Your ONLY job is to classify if the user is a DRIVER (offering) or a PASSENGER (requesting).
-
-Analyze the "Actor" in the sentence:
-- If the user says "I am driving", "I have seats", "I can take", they are the **PROVIDER** -> "ride_offer".
-- If the user says "I need", "I want", "looking for", "can you take me", they are the **CONSUMER** -> "ride_request".
-
-### FEW-SHOT EXAMPLES (Study these carefully):
-
-Message: "I need a ride to the airport"
-Actor: Wants a service.
-Intent: ride_request
-
-Message: "I am driving to the airport and have 2 empty seats"
-Actor: Providing a service.
-Intent: ride_offer
-
-Message: "Anyone going to Gulshan?"
-Actor: Asking for a ride.
-Intent: ride_request
-
-Message: "Offering a lift to North Nazimabad"
-Actor: Providing a service.
-Intent: ride_offer
-
-Message: "I have space for 3 people going to Clifton"
-Actor: Providing a service.
-Intent: ride_offer
-
-Message: "Can someone take me to the mall?"
-Actor: Wants a service.
-Intent: ride_request
-
-### END EXAMPLES
+    template="""You are a ride-sharing classification AI. Classify the user's intent.
 
 USER MESSAGE: "{message}"
 
-RESPONSE FORMAT (JSON ONLY):
+CLASSIFICATION RULES:
+1. "ride_request" = User NEEDS transportation (they want to be a passenger)
+   Examples: "need ride", "want to go", "take me to", "I'm going to X", "traveling from X to Y"
+
+2. "ride_offer" = User is OFFERING to drive (they have a car and available seats)
+   Examples: "offering ride", "have space", "can take passengers", "driving to X", "have empty seats"
+
+3. "other" = Greetings, questions, unrelated messages
+   Examples: "hello", "how does this work?", "thanks"
+
+RESPOND WITH ONLY THIS JSON FORMAT (no markdown, no code blocks, no extra text):
 {{
-    "intent": "ride_request" | "ride_offer" | "other",
-    "confidence": 1.0,
-    "reasoning": "Explain WHY. e.g., 'User explicitly mentioned having empty seats.'"
+    "intent": "ride_request",
+    "confidence": 0.95,
+    "reasoning": "Brief explanation"
 }}
 
-JSON:"""
+JSON:""",
 )
 
 # Context-Aware Extraction Prompt - NEW!

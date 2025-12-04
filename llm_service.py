@@ -1,6 +1,6 @@
 import os
 import json
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from langchain_groq import ChatGroq
 from dotenv import load_dotenv
 
@@ -24,12 +24,32 @@ class RideSharingLLMService:
 
     def __init__(self):
         self.llm = ChatGroq(
-            # model="llama-3.3-70b-versatile",
-            model="llama-3.1-8b-instant",
+            model="openai/gpt-oss-120b",
             api_key=os.getenv("GROQ_API_KEY"),
             temperature=0.0,
         )
         self.memory = memory_manager
+
+    def format_matches_for_response(self, matches: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Format matches for frontend display"""
+        formatted_matches = []
+
+        for match in matches:
+            offer = match["offer"]
+            formatted_matches.append({
+                "match_id": match.get("match_id"),
+                "match_type": match["match_type"],
+                "match_score": match["overall_score"],
+                "pickup": offer.pickup_location,
+                "drop": offer.drop_location,
+                "route": offer.route,
+                "date": offer.date,
+                "time": offer.time,
+                "remaining_seats": match["remaining_seats"],
+                "additional_info": offer.additional_info
+            })
+
+        return formatted_matches
 
     def handle_confirmation(self, message: str, session_id: str) -> Dict[str, Any]:
         """
@@ -48,7 +68,8 @@ class RideSharingLLMService:
         if not session.ride_details or not session.current_intent:
             return {
                 "status": "error",
-                "response": "I don't have any ride details to confirm. Please start over."
+                "response": "I don't have any ride details to confirm. Please start over.",
+                "matches": []
             }
 
         # Handle YES confirmation
@@ -63,7 +84,7 @@ class RideSharingLLMService:
             try:
                 details = session.ride_details
                 intent = session.current_intent
-                user_id = session_id  # Using session_id as user_id (phone number)
+                user_id = session_id
 
                 print(f"💾 Saving to database...")
                 print(f"   Intent: {intent}")
@@ -72,8 +93,7 @@ class RideSharingLLMService:
                 # Save to database
                 if intent == "ride_request":
                     ride_entry = DatabaseService.save_ride_request(db, session_id, user_id, details)
-                    
-                    # --- METRIC: Record Successful DB Save ---
+
                     DB_OPERATION_COUNTER.labels(operation="save_request", status="success").inc()
 
                     # Find matches
@@ -82,23 +102,45 @@ class RideSharingLLMService:
 
                     matches = MatchingService.find_matches(ride_entry, available_offers)
 
-                    # --- METRIC: Record Matches Found ---
                     if matches:
                         print(f"📈 Metric: Recording {len(matches)} matches found")
                         MATCH_COUNTER.labels(type="found").inc(len(matches))
 
-                    # Save matches to database
+                    # Save matches to database and get match IDs
+                    saved_matches = []
                     for match in matches:
-                        DatabaseService.save_match(
+                        db_match = DatabaseService.save_match(
                             db,
                             request_id=ride_entry.id,
                             offer_id=match["offer_id"],
                             match_type=match["match_type"],
                             match_score=match["overall_score"]
                         )
+                        match["match_id"] = db_match.id
+                        saved_matches.append(match)
 
-                    # Generate response message
-                    response_msg = MatchingService.format_match_message(ride_entry, matches)
+                    # Format matches for frontend
+                    formatted_matches = self.format_matches_for_response(saved_matches)
+
+                    # Generate appropriate response
+                    if saved_matches:
+                        response_msg = (
+                            f"✅ Your ride request has been posted successfully!\n\n"
+                            f"🎉 Great news! We found {len(saved_matches)} matching ride(s)!\n\n"
+                            f"Please review the matches below and accept the one that works best for you."
+                        )
+                    else:
+                        response_msg = (
+                            f"✅ Your ride request has been posted successfully!\n\n"
+                            f"📋 Details saved:\n"
+                            f"📍 From: {details['pickup_location']}\n"
+                            f"🎯 To: {details['drop_location']}\n"
+                            f"📅 Date: {details['date']}\n"
+                            f"🕐 Time: {details['time']}\n"
+                            f"👥 Passengers: {details['passengers']}\n\n"
+                            f"🔍 No matches found yet.\n"
+                            f"We'll notify you when a matching ride becomes available!"
+                        )
 
                     # Mark session as complete and clear
                     self.memory.mark_complete(session_id)
@@ -108,45 +150,67 @@ class RideSharingLLMService:
                         "saved_to_db": True,
                         "ride_type": "request",
                         "ride_id": ride_entry.id,
-                        "matches_found": len(matches),
+                        "matches_found": len(saved_matches),
+                        "matches": formatted_matches,
                         "response": response_msg,
                         "next_action": "completed"
                     }
 
+                # 2222
                 elif intent == "ride_offer":
                     ride_entry = DatabaseService.save_ride_offer(db, session_id, user_id, details)
-                    
-                    # --- METRIC: Record Successful DB Save ---
+
                     DB_OPERATION_COUNTER.labels(operation="save_offer", status="success").inc()
 
                     # Find matching requests for this offer
                     print(f"\n🔍 Checking for matching requests...")
                     active_requests = DatabaseService.get_active_ride_requests(db, date=details.get("date"))
 
-                    matches_count = 0
+                    saved_matches = []
                     for request in active_requests:
                         matches = MatchingService.find_matches(request, [ride_entry])
                         if matches:
                             # Save match
-                            DatabaseService.save_match(
+                            db_match = DatabaseService.save_match(
                                 db,
                                 request_id=request.id,
                                 offer_id=ride_entry.id,
                                 match_type=matches[0]["match_type"],
                                 match_score=matches[0]["overall_score"]
                             )
-                            matches_count += 1
-                    
-                    # --- METRIC: Record Matches Found ---
-                    if matches_count > 0:
-                        print(f"📈 Metric: Recording {matches_count} matches found")
-                        MATCH_COUNTER.labels(type="found").inc(matches_count)
+                            # Add match_id to the match object
+                            matches[0]["match_id"] = db_match.id
+                            # Add the request object to the match
+                            matches[0]["request"] = request
+                            saved_matches.append(matches[0])
+
+                    if saved_matches:
+                        print(f"📈 Metric: Recording {len(saved_matches)} matches found")
+                        MATCH_COUNTER.labels(type="found").inc(len(saved_matches))
+
+                    # Format matches for frontend (IMPORTANT: Now we format them!)
+                    formatted_matches = []
+                    for match in saved_matches:
+                        request = match["request"]
+                        formatted_matches.append({
+                            "match_id": match.get("match_id"),
+                            "match_type": match["match_type"],
+                            "match_score": match["overall_score"],
+                            "pickup": ride_entry.pickup_location,
+                            "drop": ride_entry.drop_location,
+                            "route": ride_entry.route,
+                            "date": ride_entry.date,
+                            "time": ride_entry.time,
+                            "remaining_seats": ride_entry.available_seats - ride_entry.seats_filled,
+                            "additional_info": ride_entry.additional_info,
+                            "requester_passengers": request.passengers  # Extra info about the requester
+                        })
 
                     response_msg = (
                         f"✅ Your ride offer has been posted successfully!\n\n"
                         f"📋 Details saved:\n"
                         f"📍 From: {details['pickup_location']}\n"
-                        f"📍 To: {details['drop_location']}\n"
+                        f"🎯 To: {details['drop_location']}\n"
                     )
 
                     if details.get("route"):
@@ -155,12 +219,13 @@ class RideSharingLLMService:
 
                     response_msg += (
                         f"📅 Date: {details['date']}\n"
-                        f"🕒 Time: {details['time']}\n"
+                        f"🕐 Time: {details['time']}\n"
                         f"💺 Available Seats: {details['available_seats']}\n\n"
                     )
 
-                    if matches_count > 0:
-                        response_msg += f"🎉 Great news! {matches_count} rider(s) are looking for similar rides. We'll connect you soon!"
+                    if len(saved_matches) > 0:
+                        response_msg += f"🎉 Great news! {len(saved_matches)} rider(s) are looking for similar rides!\n\n"
+                        response_msg += f"Please review the matches below."
                     else:
                         response_msg += "We'll notify you when riders are looking for your route!"
 
@@ -172,7 +237,8 @@ class RideSharingLLMService:
                         "saved_to_db": True,
                         "ride_type": "offer",
                         "ride_id": ride_entry.id,
-                        "matches_found": matches_count,
+                        "matches_found": len(saved_matches),
+                        "matches": formatted_matches,  # ← NOW RETURNING FORMATTED MATCHES!
                         "response": response_msg,
                         "next_action": "completed"
                     }
@@ -181,38 +247,34 @@ class RideSharingLLMService:
                 print(f"\n❌ DATABASE ERROR: {e}")
                 import traceback
                 traceback.print_exc()
-                
-                # --- METRIC: Record DB Error ---
+
                 DB_OPERATION_COUNTER.labels(operation="save_db", status="error").inc()
 
                 return {
                     "status": "error",
-                    "response": "Sorry, there was an error saving your ride. Please try again later."
+                    "response": "Sorry, there was an error saving your ride. Please try again later.",
+                    "matches": []
                 }
             finally:
                 db.close()
 
         # Handle NO or corrections
         elif message_lower in ["no", "nope", "wrong", "incorrect"]:
-            # Clear session and start over
             self.memory.clear_session(session_id)
 
             return {
                 "status": "correction_needed",
-                "response": "No problem! Let's start over. What would you like to change? Or tell me about your ride again from the beginning."
+                "response": "No problem! Let's start over. What would you like to change? Or tell me about your ride again from the beginning.",
+                "matches": []
             }
 
         # If not clear yes/no, treat as correction
         else:
             print(f"🔄 User wants to make corrections: {message}")
-
-            # Reset completion flag but keep intent
             session.is_complete = False
-
-            # Process the correction message
             result = self.process_message(message, session_id)
-
             return result
+
     def _parse_json_response(self, response_text: str) -> dict:
         """Robust JSON parsing with cleaning"""
         text = response_text.strip()
@@ -242,20 +304,18 @@ class RideSharingLLMService:
             print(f"👤 Session ID: {session_id}")
             print(f"📝 User Message: {message}")
 
-            # Get conversation history
             history = self.memory.get_conversation_history(session_id, last_n=5)
 
             if history:
                 print(f"🧠 Using conversation history ({len(history)} messages)")
-                for i, msg in enumerate(history[-3:], 1):  # Show last 3
+                for i, msg in enumerate(history[-3:], 1):
                     print(f"   {i}. {msg['role']}: {msg['content'][:50]}...")
             else:
                 print(f"🧠 No conversation history (first message)")
 
             chain = INTENT_CLASSIFICATION_PROMPT | self.llm
             response = chain.invoke({"message": message})
-            
-            # --- METRIC: Record LLM Duration ---
+
             duration = time.time() - start_time
             LLM_LATENCY.labels(operation="classify").observe(duration)
             result_text = response.content.strip()
@@ -263,8 +323,7 @@ class RideSharingLLMService:
             print(f"🤖 LLM Raw Response:\n{result_text}")
 
             result = self._parse_json_response(result_text)
-            
-            # --- METRIC: Record Intent Type ---
+
             intent_type = result.get("intent", "unknown")
             INTENT_COUNTER.labels(intent_type=intent_type).inc()
 
@@ -272,7 +331,6 @@ class RideSharingLLMService:
             print(f"✅ Confidence: {result['confidence']}")
             print(f"✅ Reasoning: {result['reasoning']}")
 
-            # Store intent in memory
             self.memory.set_intent(session_id, result["intent"])
 
             print(f"{'='*60}\n")
@@ -285,7 +343,6 @@ class RideSharingLLMService:
 
             traceback.print_exc()
 
-            # Simple fallback
             message_lower = message.lower()
             if any(
                 word in message_lower
@@ -320,7 +377,6 @@ class RideSharingLLMService:
             print(f"📝 Message: {message}")
             print(f"🎯 Intent: {intent}")
 
-            # Get session data
             session = self.memory.get_session(session_id)
             existing_details = session.ride_details
 
@@ -330,12 +386,10 @@ class RideSharingLLMService:
                     if value is not None:
                         print(f"   • {key}: {value}")
 
-            # Get conversation history for context
             conversation_text = self.memory.get_conversation_history(
                 session_id, last_n=5, format_type="text"
             )
 
-            # Use context-aware extraction prompt
             chain = CONTEXT_AWARE_EXTRACTION_PROMPT | self.llm
             response = chain.invoke(
                 {
@@ -345,11 +399,10 @@ class RideSharingLLMService:
                     "existing_details": json.dumps(existing_details),
                 }
             )
-            
-            # --- METRIC: Record Duration ---
+
             duration = time.time() - start_time
             LLM_LATENCY.labels(operation="extract").observe(duration)
-            
+
             result_text = response.content.strip()
 
             print(f"\n🤖 LLM Raw Response:")
@@ -363,25 +416,20 @@ class RideSharingLLMService:
             for key, value in result["details"].items():
                 print(f"   • {key}: {value}")
 
-            # Merge with existing details
             merged_details = {**existing_details, **result["details"]}
 
-            # Set defaults
             if intent == "ride_request" and merged_details.get("passengers") is None:
                 merged_details["passengers"] = 1
                 print(f"   • passengers: 1 (default)")
 
-            # Update memory with merged details
             self.memory.update_ride_details(session_id, merged_details)
 
-            # Determine required fields (route is optional, not required)
             required_fields = ["pickup_location", "drop_location", "date", "time"]
             if intent == "ride_request":
                 required_fields.append("passengers")
             elif intent == "ride_offer":
                 required_fields.append("available_seats")
 
-            # Calculate missing fields from MERGED details
             missing = [
                 field for field in required_fields if merged_details.get(field) is None
             ]
@@ -393,7 +441,6 @@ class RideSharingLLMService:
             print(f"   • Missing fields: {', '.join(missing) if missing else 'None'}")
             print(f"   • Is complete: {is_complete}")
 
-            # Generate clarifying question if incomplete
             clarifying_question = None
             if not is_complete and missing:
                 clarifying_question = self.generate_clarifying_question(
@@ -418,11 +465,9 @@ class RideSharingLLMService:
 
             traceback.print_exc()
 
-            # Get existing details from memory
             session = self.memory.get_session(session_id)
             existing_details = session.ride_details or {}
 
-            # Determine what's still missing
             required_fields = ["pickup_location", "drop_location", "date", "time"]
             if intent == "ride_request":
                 required_fields.append("passengers")
@@ -462,7 +507,6 @@ class RideSharingLLMService:
         except Exception as e:
             print(f"⚠️ Clarification generation error: {e}")
 
-            # Priority-based question generation
             field_questions = {
                 "pickup_location": "Where will you be starting from?",
                 "drop_location": "Where do you need to go?",
@@ -484,7 +528,6 @@ class RideSharingLLMService:
     ) -> str:
         """Generate confirmation message"""
         try:
-            # Print session summary before confirmation
             self.memory.print_session_summary(session_id)
 
             chain = CONFIRMATION_PROMPT | self.llm
@@ -495,30 +538,29 @@ class RideSharingLLMService:
         except Exception as e:
             print(f"⚠️ Confirmation generation error: {e}")
 
-            # Fallback confirmation
             msg = "Let me confirm your ride:\n"
             if details.pickup_location:
                 msg += f"📍 From: {details.pickup_location}\n"
             if details.drop_location:
-                msg += f"📍 To: {details.drop_location}\n"
+                msg += f"🎯 To: {details.drop_location}\n"
             if details.route:
                 route_str = " → ".join(details.route)
                 msg += f"🛣️ Route: {route_str}\n"
             if details.date:
                 msg += f"📅 Date: {details.date}\n"
             if details.time:
-                msg += f"🕒 Time: {details.time}\n"
+                msg += f"🕐 Time: {details.time}\n"
             if details.passengers:
                 msg += f"👥 Passengers: {details.passengers}\n"
             if details.available_seats:
                 msg += f"💺 Available Seats: {details.available_seats}\n"
 
-            msg += "\nIs this correct? Reply 'Yes' to confirm."
+            msg += "\nIs everything correct? Reply 'Yes' to confirm."
             return msg
 
     def process_message(
-    self, message: str, session_id: str = "default"
-) -> Dict[str, Any]:
+        self, message: str, session_id: str = "default"
+    ) -> Dict[str, Any]:
         """Complete message processing pipeline with memory"""
 
         print(f"\n{'#'*60}")
@@ -527,16 +569,13 @@ class RideSharingLLMService:
         print(f"👤 Session ID: {session_id}")
         print(f"📝 Message: {message}\n")
 
-        # Add user message to memory
         self.memory.add_user_message(session_id, message)
 
-        # CHECK IF WAITING FOR CONFIRMATION
         session = self.memory.get_session(session_id)
         if session.is_complete and session.current_intent in ["ride_request", "ride_offer"]:
             print(f"⏳ Session is complete, waiting for confirmation...")
             confirmation_result = self.handle_confirmation(message, session_id)
 
-            # Add assistant response to memory
             self.memory.add_assistant_message(session_id, confirmation_result["response"])
 
             return {
@@ -548,12 +587,11 @@ class RideSharingLLMService:
                 "response": confirmation_result["response"],
                 "next_action": confirmation_result.get("next_action", "completed"),
                 "saved_to_db": confirmation_result.get("saved_to_db", False),
-                "matches_found": confirmation_result.get("matches_found", 0)
+                "matches_found": confirmation_result.get("matches_found", 0),
+                "matches": confirmation_result.get("matches", [])
             }
 
-        # CHECK IF CONVERSATION IS ALREADY IN PROGRESS
         if session.current_intent and session.current_intent != "other" and not session.is_complete:
-            # Don't re-classify, use existing intent
             print(f"🔄 Continuing existing conversation with intent: {session.current_intent}")
             intent_result = IntentResponse(
                 intent=session.current_intent,
@@ -561,14 +599,12 @@ class RideSharingLLMService:
                 reasoning="Continuing existing conversation flow"
             )
         else:
-            # Step 1: Classify intent
             intent_result = self.classify_intent(message, session_id)
 
         if intent_result.intent == "other":
             print(f"ℹ️ Intent classified as 'other' - sending greeting\n")
             response_msg = "Hello! I can help you find rides or offer rides. Please tell me if you need a ride or if you're offering one."
 
-            # Add assistant response to memory
             self.memory.add_assistant_message(session_id, response_msg)
 
             return {
@@ -579,14 +615,13 @@ class RideSharingLLMService:
                 "details": {},
                 "missing_fields": [],
                 "next_action": "awaiting_intent",
+                "matches": []
             }
 
-        # Step 2: Extract information with context
         extraction_result = self.extract_information(
             message, intent_result.intent, session_id
         )
 
-        # Step 3: Generate appropriate response
         if extraction_result.is_complete:
             confirmation_msg = self.generate_confirmation_message(
                 intent_result.intent, extraction_result.details, session_id
@@ -594,7 +629,6 @@ class RideSharingLLMService:
             response_message = confirmation_msg
             next_action = "awaiting_confirmation"
 
-            # Mark session as complete
             self.memory.mark_complete(session_id)
 
             print(f"✅ Extraction complete - sending confirmation")
@@ -603,14 +637,12 @@ class RideSharingLLMService:
             next_action = "awaiting_details"
             print(f"⏳ Extraction incomplete - asking for clarification")
 
-        # Add assistant response to memory
         self.memory.add_assistant_message(session_id, response_message)
 
         print(f"\n{'#'*60}")
         print(f"✅ PROCESSING COMPLETE")
         print(f"{'#'*60}\n")
 
-        # Print memory stats
         self.memory.print_memory_stats()
 
         return {
@@ -621,4 +653,5 @@ class RideSharingLLMService:
             "is_complete": extraction_result.is_complete,
             "response": response_message,
             "next_action": next_action,
+            "matches": []
         }

@@ -27,13 +27,16 @@ def validate_response(result: Dict[str, Any]) -> Dict[str, Any]:
         "is_complete": result.get("is_complete", False),
         "response": result.get("response", "Sorry, something went wrong."),
         "next_action": result.get("next_action", "awaiting_input"),
+        "matches_found": result.get("matches_found", 0),
+        "matches": result.get("matches", []),
     }
 
 
 @app.on_event("startup")
 async def startup_event():
-    # Start metrics server on port 8000
-    init_metrics(port=8000)
+    # Start metrics server on port 8001 (or any free port)
+    init_metrics(port=8001)
+
 
 @app.get("/")
 def read_root():
