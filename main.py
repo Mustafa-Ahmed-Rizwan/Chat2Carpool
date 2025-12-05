@@ -34,8 +34,8 @@ def validate_response(result: Dict[str, Any]) -> Dict[str, Any]:
 
 @app.on_event("startup")
 async def startup_event():
-    # Start metrics server on port 8001 (or any free port)
-    init_metrics(port=8001)
+    # Start metrics server on port 8000 (or any free port)
+    init_metrics(port=8000)
 
 
 @app.get("/")
