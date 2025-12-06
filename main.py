@@ -1,5 +1,5 @@
-from fastapi import FastAPI, Form, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi.responses import PlainTextResponse, Response
 from dotenv import load_dotenv
 import os
 from typing import Dict, Any
@@ -8,10 +8,12 @@ from llm_service import RideSharingLLMService
 from models import ProcessedMessage
 from memory_manager import memory_manager
 from metrics import init_metrics
+from whatsapp_service import whatsapp_service
+from fastapi.responses import Response
 
 load_dotenv()
 
-app = FastAPI(title="Chat2Carpool API")
+app = FastAPI(title="Chat2Carpool WhatsApp API")
 
 # Initialize LLM Service
 llm_service = RideSharingLLMService()
@@ -34,68 +36,75 @@ def validate_response(result: Dict[str, Any]) -> Dict[str, Any]:
 
 @app.on_event("startup")
 async def startup_event():
-    # Start metrics server on port 8001 (or any free port)
     init_metrics(port=8001)
+    print("✅ Chat2Carpool WhatsApp API Started!")
+    print(f"📱 Twilio Number: {os.getenv('TWILIO_PHONE_NUMBER')}")
 
 
 @app.get("/")
 def read_root():
     return {
-        "message": "Ride Sharing Bot API with Memory is running!",
+        "message": "Chat2Carpool WhatsApp API is running!",
+        "status": "active",
+        "integration": "Twilio WhatsApp",
         "endpoints": {
             "webhook": "/webhook/whatsapp",
-            "test": "/test",
-            "memory_stats": "/memory/stats",
-            "session_info": "/memory/session/{session_id}",
-            "clear_session": "/memory/clear/{session_id}",
-        },
-        "features": [
-            "Multi-turn conversations",
-            "Context awareness",
-            "Session management",
-        ],
+            "status": "/webhook/status",
+        }
     }
 
 
-@app.post("/webhook/whatsapp", response_class=PlainTextResponse)
+@app.post("/webhook/whatsapp")
 async def whatsapp_webhook(
     From: str = Form(...),
     To: str = Form(...),
     Body: str = Form(...),
-    MessageSid: str = Form(...),
+    MessageSid: str = Form(None),
 ):
     """
-    Twilio WhatsApp webhook endpoint
-    Receives incoming messages and processes them with memory
+    Main WhatsApp webhook - handles all incoming messages
     """
     try:
-        # Use phone number as session ID (normalize it)
+        # Extract session ID from phone number
         session_id = From.replace("whatsapp:", "").replace("+", "")
+        user_message = Body.strip()
 
-        print(f"\n{'='*50}")
+        print(f"\n{'='*60}")
         print(f"📱 WhatsApp Message Received")
         print(f"From: {From}")
-        print(f"Session ID: {session_id}")
-        print(f"Message: {Body}")
-        print(f"{'='*50}\n")
+        print(f"Session: {session_id}")
+        print(f"Message: {user_message}")
+        print(f"{'='*60}\n")
 
-        # Process message through LLM with memory
-        result = llm_service.process_message(Body, session_id=session_id)
+        # Check for special commands (accept/reject match)
+        if user_message.lower().startswith("accept "):
+            return handle_match_action(session_id, user_message, "accept")
+
+        if user_message.lower().startswith("reject "):
+            return handle_match_action(session_id, user_message, "reject")
+
+        # Process normal conversation message
+        result = llm_service.process_message(user_message, session_id=session_id)
         validated_result = validate_response(result)
 
-        # Log the result
-        print(f"✅ Response prepared:")
-        print(f"   Intent: {validated_result['intent']}")
-        print(f"   Complete: {validated_result['is_complete']}")
-        print(f"   Response: {validated_result['response'][:100]}...")
+        # Format response for WhatsApp
+        response_text = validated_result["response"]
 
-        # Send response back via Twilio TwiML
-        twiml_response = f"""<?xml version="1.0" encoding="UTF-8"?>
+        # If matches found, format them nicely
+        if validated_result.get("matches_found", 0) > 0:
+            matches = validated_result.get("matches", [])
+            matches_text = whatsapp_service.format_matches_message(matches)
+            response_text = f"{response_text}\n\n{matches_text}"
+
+        print(f"🤖 Sending response: {response_text[:100]}...")
+
+        # Return TwiML response with correct content type
+        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Message>{validated_result['response']}</Message>
+    <Message>{response_text}</Message>
 </Response>"""
 
-        return twiml_response
+        return Response(content=twiml, media_type="application/xml")
 
     except Exception as e:
         print(f"❌ Error processing webhook: {e}")
@@ -103,57 +112,149 @@ async def whatsapp_webhook(
 
         traceback.print_exc()
 
-        error_response = """<?xml version="1.0" encoding="UTF-8"?>
+        error_twiml = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Message>Sorry, I encountered an error. Please try again.</Message>
+    <Message>Sorry, I encountered an error. Please try again or type 'help' for assistance.</Message>
 </Response>"""
-        return error_response
+        return Response(content=error_twiml, media_type="application/xml")
 
 
-@app.post("/test")
-async def test_message(message: str, session_id: str = "test_user") -> Dict[str, Any]:
+def handle_match_action(session_id: str, message: str, action: str) -> Response:
     """
-    Test endpoint to process messages without WhatsApp
-    Supports session management for testing multi-turn conversations
+    Handle accept/reject match commands
+    Example: "accept 15" or "reject 15"
     """
     try:
-        print(f"\n{'='*50}")
-        print(f"🧪 TEST MESSAGE")
-        print(f"Session ID: {session_id}")
-        print(f"Message: {message}")
-        print(f"{'='*50}\n")
+        from database import SessionLocal
+        from db_service import DatabaseService
 
-        result = llm_service.process_message(message, session_id=session_id)
-        validated_result = validate_response(result)
+        # Extract match ID from message
+        parts = message.strip().split()
+        if len(parts) < 2:
+            return Response(
+                content=create_twiml_response(
+                    "❌ Please provide a match ID.\nExample: `accept 15`"
+                ),
+                media_type="application/xml",
+            )
 
-        return {"success": True, "session_id": session_id, "data": validated_result}
+        try:
+            match_id = int(parts[1])
+        except ValueError:
+            return Response(
+                content=create_twiml_response(
+                    "❌ Invalid match ID. Please use a number.\nExample: `accept 15`"
+                ),
+                media_type="application/xml",
+            )
+
+        db = SessionLocal()
+
+        try:
+            if action == "accept":
+                # Confirm the match
+                result = DatabaseService.confirm_match(db, match_id, session_id)
+
+                if not result["success"]:
+                    return Response(
+                        content=create_twiml_response(f"❌ {result['error']}"),
+                        media_type="application/xml",
+                    )
+
+                # Format success message
+                response_msg = whatsapp_service.format_confirmation_message(
+                    {
+                        "message": f"""🎉 *Match Confirmed!*
+
+📋 *Ride Details:*
+📍 From: {result['offer'].pickup_location}
+🎯 To: {result['offer'].drop_location}
+📅 Date: {result['offer'].date}
+🕐 Time: {result['offer'].time}
+👥 Passengers: {result['request'].passengers}
+
+{'💺 Driver has ' + str(result['remaining_seats']) + ' seat(s) left.' if result['offer_still_active'] else '💺 All seats filled!'}
+
+📞 Contact details will be shared separately.
+🚗 Have a safe journey!"""
+                    }
+                )
+
+                return Response(
+                    content=create_twiml_response(response_msg),
+                    media_type="application/xml",
+                )
+
+            elif action == "reject":
+                # Reject the match
+                result = DatabaseService.reject_match(db, match_id, session_id)
+
+                if not result["success"]:
+                    return Response(
+                        content=create_twiml_response(f"❌ {result['error']}"),
+                        media_type="application/xml",
+                    )
+
+                return Response(
+                    content=create_twiml_response(
+                        "✅ Match rejected successfully.\n\n"
+                        "Other matches are still available. Type 'my matches' to see them."
+                    ),
+                    media_type="application/xml",
+                )
+
+        finally:
+            db.close()
+
     except Exception as e:
+        print(f"❌ Error handling match action: {e}")
         import traceback
 
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        return Response(
+            content=create_twiml_response(
+                "❌ Sorry, something went wrong. Please try again."
+            ),
+            media_type="application/xml",
+        )
+
+
+def create_twiml_response(message: str) -> str:
+    """Helper to create TwiML response"""
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Message>{message}</Message>
+</Response>"""
+
+
+@app.post("/webhook/status")
+async def whatsapp_status(request: Request):
+    """
+    Handle delivery status callbacks from Twilio
+    """
+    form_data = await request.form()
+    print(f"📊 Message Status: {form_data.get('MessageStatus')}")
+    print(f"   Message SID: {form_data.get('MessageSid')}")
+    return Response(status_code=200)
 
 
 @app.get("/health")
 def health_check():
-    """Health check endpoint with memory statistics"""
+    """Health check endpoint"""
     stats = memory_manager.get_memory_stats()
     return {
         "status": "healthy",
-        "service": "Ride Sharing Bot with Memory",
+        "service": "Chat2Carpool WhatsApp API",
+        "twilio_configured": bool(os.getenv("TWILIO_ACCOUNT_SID")),
         "memory_stats": stats,
     }
 
 
-# Memory Management Endpoints
-
-
+# Keep existing memory management endpoints
 @app.get("/memory/stats")
 def get_memory_stats():
-    """Get overall memory statistics"""
     stats = memory_manager.get_memory_stats()
     active_sessions = memory_manager.get_active_sessions()
-
     return {
         "stats": stats,
         "active_sessions": active_sessions,
@@ -161,260 +262,15 @@ def get_memory_stats():
     }
 
 
-@app.get("/memory/session/{session_id}")
-def get_session_info(session_id: str):
-    """Get detailed information about a specific session"""
-    try:
-        session = memory_manager.get_session(session_id)
-
-        return {
-            "session_id": session.session_id,
-            "created_at": session.created_at.isoformat(),
-            "last_activity": session.last_activity.isoformat(),
-            "message_count": len(session.messages),
-            "current_intent": session.current_intent,
-            "is_complete": session.is_complete,
-            "ride_details": session.ride_details,
-            "messages": [
-                {
-                    "role": msg.role,
-                    "content": msg.content,
-                    "timestamp": msg.timestamp.isoformat(),
-                }
-                for msg in session.messages
-            ],
-        }
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Session not found: {str(e)}")
-
-
 @app.post("/memory/clear/{session_id}")
 def clear_session(session_id: str):
-    """Clear a specific session's conversation history"""
     try:
         memory_manager.clear_session(session_id)
-        return {
-            "success": True,
-            "message": f"Session {session_id} cleared successfully",
-        }
+        return {"success": True, "message": f"Session {session_id} cleared"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/memory/session/{session_id}")
-def delete_session(session_id: str):
-    """Completely delete a session"""
-    try:
-        memory_manager.delete_session(session_id)
-        return {
-            "success": True,
-            "message": f"Session {session_id} deleted successfully",
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/memory/clear-all")
-def clear_all_sessions():
-    """Clear all sessions (use with caution!)"""
-    try:
-        active_sessions = memory_manager.get_active_sessions()
-        for session_id in active_sessions:
-            memory_manager.delete_session(session_id)
-
-        return {"success": True, "message": f"Cleared {len(active_sessions)} sessions"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/confirm-match")
-async def confirm_match_endpoint(match_id: int, session_id: str):
-    """
-    Confirm a match - updates DB and deactivates matched records
-    """
-    from database import SessionLocal
-    from db_service import DatabaseService
-
-    db = SessionLocal()
-
-    try:
-        print(f"\n{'='*60}")
-        print(f"✅ CONFIRMING MATCH")
-        print(f"{'='*60}")
-        print(f"Match ID: {match_id}")
-        print(f"Session ID: {session_id}")
-
-        # Confirm the match
-        result = DatabaseService.confirm_match(db, match_id, session_id)
-
-        if not result["success"]:
-            return {"success": False, "message": result["error"]}
-
-        # Generate response message
-        offer = result["offer"]
-        request = result["request"]
-
-        response_msg = f"🎉 Match Confirmed Successfully!\n\n"
-        response_msg += f"📋 Ride Details:\n"
-        response_msg += f"📍 From: {offer.pickup_location}\n"
-        response_msg += f"🎯 To: {offer.drop_location}\n"
-        response_msg += f"📅 Date: {offer.date}\n"
-        response_msg += f"🕒 Time: {offer.time}\n"
-        response_msg += f"👥 Passengers: {request.passengers}\n\n"
-
-        if result["offer_still_active"]:
-            response_msg += f"💺 Driver still has {result['remaining_seats']} seat(s) available for others.\n\n"
-        else:
-            response_msg += (
-                f"💺 All seats are now filled. Ride offer has been completed.\n\n"
-            )
-
-        response_msg += f"📞 Contact details will be shared separately.\n"
-        response_msg += f"🚗 Have a safe journey!"
-
-        return {
-            "success": True,
-            "message": response_msg,
-            "data": {
-                "match_id": match_id,
-                "request_id": request.id,
-                "offer_id": offer.id,
-                "offer_still_active": result["offer_still_active"],
-                "remaining_seats": result["remaining_seats"],
-            },
-        }
-
-    except Exception as e:
-        print(f"❌ Error in confirm match endpoint: {e}")
-        import traceback
-
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        db.close()
-
-
-@app.get("/my-matches")
-async def get_my_matches(session_id: str):
-    """
-    Get all pending matches for a user
-    """
-    from database import SessionLocal
-    from db_service import DatabaseService
-
-    db = SessionLocal()
-
-    try:
-        matches = DatabaseService.get_user_matches(db, session_id)
-
-        if not matches:
-            return {
-                "success": True,
-                "message": "No pending matches found",
-                "matches": [],
-            }
-
-        # Format response
-        formatted_matches = []
-        for match in matches:
-            formatted_matches.append(
-                {
-                    "match_id": match["match_id"],
-                    "role": match["role"],
-                    "match_type": match["match_type"],
-                    "match_score": match["match_score"],
-                    "status": match["status"],
-                    "pickup": match["offer"].pickup_location,
-                    "drop": match["offer"].drop_location,
-                    "date": match["offer"].date,
-                    "time": match["offer"].time,
-                    "passengers": match["request"].passengers,
-                    "remaining_seats": match["remaining_seats"],
-                }
-            )
-
-        return {
-            "success": True,
-            "message": f"Found {len(matches)} pending match(es)",
-            "matches": formatted_matches,
-        }
-
-    except Exception as e:
-        print(f"❌ Error getting matches: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        db.close()
-
-
-@app.post("/reject-match")
-async def reject_match_endpoint(match_id: int, session_id: str):
-    """
-    Reject a match
-    """
-    from database import SessionLocal
-    from db_service import DatabaseService
-
-    db = SessionLocal()
-
-    try:
-        result = DatabaseService.reject_match(db, match_id, session_id)
-
-        if not result["success"]:
-            return {"success": False, "message": result["error"]}
-
-        return {"success": True, "message": "Match rejected successfully"}
-
-    except Exception as e:
-        print(f"❌ Error rejecting match: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        db.close()
-
-
-@app.get("/match-details/{match_id}")
-async def get_match_details_endpoint(match_id: int, session_id: str):
-    """
-    Get detailed information about a specific match
-    """
-    from database import SessionLocal
-    from db_service import DatabaseService
-
-    db = SessionLocal()
-
-    try:
-        details = DatabaseService.get_match_details(db, match_id)
-
-        if not details:
-            raise HTTPException(status_code=404, detail="Match not found")
-
-        return {
-            "success": True,
-            "data": {
-                "match_id": details["match_id"],
-                "match_type": details["match_type"],
-                "match_score": details["match_score"],
-                "status": details["status"],
-                "pickup": details["offer"].pickup_location,
-                "drop": details["offer"].drop_location,
-                "route": details["offer"].route,
-                "date": details["offer"].date,
-                "time": details["offer"].time,
-                "passengers": details["request"].passengers,
-                "remaining_seats": details["remaining_seats"],
-            },
-        }
-
-    except Exception as e:
-        print(f"❌ Error getting match details: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        db.close()
-
-
-# Graceful shutdown
-@app.on_event("shutdown")
-def shutdown_event():
-    """Cleanup on shutdown"""
-    print("🛑 Shutting down... Cleaning up memory")
-    stats = memory_manager.get_memory_stats()
-    print(f"📊 Final stats: {stats}")
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8002)
